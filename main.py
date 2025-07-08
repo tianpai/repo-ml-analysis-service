@@ -32,6 +32,9 @@ model = SentenceTransformer("all-MiniLM-L6-v2")
 
 app = FastAPI()
 
+# Get port from environment variable (Railway sets this)
+PORT = int(os.getenv("PORT", 8000))
+
 # ── aggregation pipeline (from Compass) ───────────────────────────────────────
 PIPELINE = [
     {"$group": {"_id": None, "latestTrendingDate": {"$max": "$trendingDate"}}},
@@ -137,3 +140,8 @@ async def analyze_keywords(
 @app.get("/")
 async def root():
     return {"message": "repo-ml-analysis-service up (MongoDB + ML keyword clustering)"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
