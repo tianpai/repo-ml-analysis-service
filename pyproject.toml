@@ -1,0 +1,23 @@
+[project]
+name = "repo-ml-analysis-service"
+version = "0.1.0"
+description = "a FastAPI-based Python microservice for lightweight ML analysis related to GitHub repositories and project data."
+authors = [
+    {name = "Tianpai"},
+]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi",
+    "pymongo",
+    "sentence-transformers",
+    "scikit-learn",
+    "python-dotenv",
+    "uvicorn[standard]",
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
