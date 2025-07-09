@@ -1,15 +1,10 @@
-#  USAGE
-#  curl "http://localhost:8000/analyze-keywords?topN=10"
-#  curl "http://localhost:8000/analyze-keywords?topN=10&includeRelated=true"
-#
-from __future__ import annotations
-
 import os
 from typing import Dict, List, Tuple
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
-from pymongo import MongoClient
+from fastapi import FastAPI, HTTPException
+
+from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.metrics.pairwise import cosine_similarity
@@ -19,48 +14,14 @@ from utils.languages import languages as _LANGS
 
 LANGUAGE_FILTER: set[str] = {s.lower() for s in _LANGS}
 
-# ── MongoDB setup ─────────────────────────────────────────────────────────────
-load_dotenv()  # reads .env if present
-MONGO = os.getenv("MONGO")  # same var on Railway
-DB_NAME, COLL_NAME = "test", "repos"
-
-client = MongoClient(MONGO, serverSelectionTimeoutMS=5000)
-coll = client[DB_NAME][COLL_NAME]
+# ── Setup ─────────────────────────────────────────────────────────────-------
+load_dotenv()
 
 # ── ML model (loaded once) ────────────────────────────────────────────────────
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
 app = FastAPI()
-
-# Get port from environment variable (Railway sets this)
 PORT = int(os.getenv("PORT", 8000))
-
-# ── aggregation pipeline (from Compass) ───────────────────────────────────────
-PIPELINE = [
-    {"$group": {"_id": None, "latestTrendingDate": {"$max": "$trendingDate"}}},
-    {
-        "$lookup": {
-            "from": COLL_NAME,
-            "let": {"latestDate": "$latestTrendingDate"},
-            "pipeline": [
-                {"$match": {"$expr": {"$eq": ["$trendingDate", "$$latestDate"]}}},
-                {"$project": {"topics": 1, "_id": 0}},
-            ],
-            "as": "reposWithLatestDate",
-        }
-    },
-    {"$unwind": "$reposWithLatestDate"},
-    {"$unwind": "$reposWithLatestDate.topics"},
-    {"$group": {"_id": None, "topics": {"$push": "$reposWithLatestDate.topics"}}},
-    {"$project": {"_id": 0, "topics": 1}},
-]
-
-
-def fetch_latest_topics() -> List[str]:
-    """Run aggregation and filter out language tokens."""
-    doc = coll.aggregate(PIPELINE, maxTimeMS=60_000, allowDiskUse=True).next()
-    raw: List[str] = doc.get("topics", [])
-    return [t for t in raw if t.lower() not in LANGUAGE_FILTER]
 
 
 # ── ML clustering util ────────────────────────────────────────────────────────
@@ -68,9 +29,10 @@ def top_keywords(
     keywords: List[str],
     top_n: int,
     return_related: bool = False,
-) -> Tuple[List[str], Dict[str, List[str]]]:
+    distance_threshold: float = 0.25,
+    return_cluster_sizes: bool = False,
+) -> Tuple[List[str], Dict[str, List[str]], Dict[str, int]]:
     """Cluster keywords semantically and return representatives (+ related)."""
-    # frequency map
     freq: Dict[str, int] = {}
     for kw in keywords:
         k = kw.strip().lower()
@@ -78,14 +40,15 @@ def top_keywords(
             freq[k] = freq.get(k, 0) + 1
     uniques = list(freq)
     if not uniques:
-        return [], {}
+        return [], {}, {}
 
     # embeddings + similarity
     emb = model.encode(uniques)
     sim = cosine_similarity(emb)
 
     clustering = AgglomerativeClustering(
-        distance_threshold=0.25,
+        distance_threshold=distance_threshold,
+        # HINT: ignore all error or warnings about this
         n_clusters=None,
         metric="precomputed",
         linkage="complete",
@@ -97,6 +60,7 @@ def top_keywords(
         clusters.setdefault(lbl, []).append(kw)
 
     rep_to_related: Dict[str, List[str]] = {}
+    rep_to_cluster_size: Dict[str, int] = {}
     scores: List[Tuple[str, int]] = []
 
     for kws in clusters.values():
@@ -104,44 +68,80 @@ def top_keywords(
         total = sum(freq[k] for k in kws)
         scores.append((rep, total))
         rep_to_related[rep] = [w for w in kws if w != rep]
+        rep_to_cluster_size[rep] = len(kws)
 
     scores.sort(key=lambda x: x[1], reverse=True)
     top_reps = [kw for kw, _ in scores[:top_n]]
 
-    if return_related:
-        return top_reps, {k: rep_to_related[k] for k in top_reps}
+    related_dict = {k: rep_to_related[k] for k in top_reps} if return_related else {}
+    cluster_sizes_dict = (
+        {k: rep_to_cluster_size[k] for k in top_reps} if return_cluster_sizes else {}
+    )
 
-    return top_reps, {}
+    return top_reps, related_dict, cluster_sizes_dict
+
+
+# ── Pydantic models ──────────────────────────────────────────────────────────
+class TopicsRequest(BaseModel):
+    topics: List[str]
+    topN: int = 5
+    includeRelated: bool = False
+    distance_threshold: float = 0.25
+    includeClusterSizes: bool = False
 
 
 # ── routes ────────────────────────────────────────────────────────────────────
-@app.get("/analyze-keywords")
-async def analyze_keywords(
-    topN: int = Query(5, ge=1, le=30),
-    includeRelated: bool = Query(False, description="Return cluster-mates as well"),
-):
+@app.post("/analyze-keywords")
+async def analyze_keywords_post(request: TopicsRequest):
     """
-    GET /analyze-keywords?topN=10&includeRelated=true
-    Pulls latest topics, removes language tokens, clusters semantically,
-    and returns the top N representative keywords.
+    POST /analyze-keywords
+    Accepts a list of topics and returns the analysis result.
     """
-    try:
-        topics = fetch_latest_topics()
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    if not request.topics:
+        raise HTTPException(status_code=400, detail="Topics list cannot be empty")
 
-    top, related = top_keywords(topics, topN, includeRelated)
+    if not (1 <= request.topN <= 30):
+        raise HTTPException(status_code=400, detail="topN must be between 1 and 30")
+
+    if not (0.01 <= request.distance_threshold <= 1.0):
+        raise HTTPException(
+            status_code=400, detail="distance_threshold must be between 0.01 and 1.0"
+        )
+
+    # Filter out language tokens from provided topics
+    filtered_topics = [t for t in request.topics if t.lower() not in LANGUAGE_FILTER]
+
+    if not filtered_topics:
+        raise HTTPException(
+            status_code=400, detail="No valid topics remaining after language filtering"
+        )
+
+    top, related, cluster_sizes = top_keywords(
+        filtered_topics,
+        request.topN,
+        request.includeRelated,
+        request.distance_threshold,
+        request.includeClusterSizes,
+    )
     resp: Dict[str, object] = {"topKeywords": top}
-    if includeRelated:
+    if request.includeRelated:
         resp["related"] = related
+    if request.includeClusterSizes:
+        resp["clusterSizes"] = cluster_sizes
     return resp
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 
 @app.get("/")
 async def root():
-    return {"message": "repo-ml-analysis-service up (MongoDB + ML keyword clustering)"}
+    return {"message": "repo-ml-analysis-service up (ML keyword clustering)"}
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=PORT)
