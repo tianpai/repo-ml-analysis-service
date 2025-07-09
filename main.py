@@ -9,16 +9,12 @@ from sentence_transformers import SentenceTransformer
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.metrics.pairwise import cosine_similarity
 
-# ── stop-list import ──────────────────────────────────────────────────────────
-from utils.languages import languages as _LANGS
-
-LANGUAGE_FILTER: set[str] = {s.lower() for s in _LANGS}
-
 # ── Setup ─────────────────────────────────────────────────────────────-------
 load_dotenv()
 
 # ── ML model (loaded once) ────────────────────────────────────────────────────
-model = SentenceTransformer("all-MiniLM-L6-v2")
+# model = SentenceTransformer("all-MiniLM-L12-v2")
+model = SentenceTransformer("all-MiniLM-L12-v2")  # smaller model
 
 app = FastAPI()
 PORT = int(os.getenv("PORT", 8000))
@@ -108,16 +104,8 @@ async def analyze_keywords_post(request: TopicsRequest):
             status_code=400, detail="distance_threshold must be between 0.01 and 1.0"
         )
 
-    # Filter out language tokens from provided topics
-    filtered_topics = [t for t in request.topics if t.lower() not in LANGUAGE_FILTER]
-
-    if not filtered_topics:
-        raise HTTPException(
-            status_code=400, detail="No valid topics remaining after language filtering"
-        )
-
     top, related, cluster_sizes = top_keywords(
-        filtered_topics,
+        request.topics,
         request.topN,
         request.includeRelated,
         request.distance_threshold,
@@ -129,11 +117,6 @@ async def analyze_keywords_post(request: TopicsRequest):
     if request.includeClusterSizes:
         resp["clusterSizes"] = cluster_sizes
     return resp
-
-
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
 
 
 @app.get("/")
