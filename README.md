@@ -20,7 +20,7 @@ repositories.
 1. POST /analyze-keywords
 
 ```bash
-curl --location 'http://localhost:8000/analyze-keywords' \
+curl --location 'http://localhost:8080/analyze-keywords' \
 --header 'Content-Type: application/json' \
 --data '{
   "topics": [
@@ -56,16 +56,17 @@ curl --location 'http://localhost:8000/analyze-keywords' \
     "framework",
     "llms",
     "linux",
-    "game-development",
+    "game-development"
     ],
     "topN": 5,
     "includeRelated": true,
     "distance_threshold": 0.25,
-    "includeClusterSizes": true
+    "includeClusterSizes": true,
+    "batchSize": 128
 }'
 ```
 
-response:
+Response:
 
 ```json
 {

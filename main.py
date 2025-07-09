@@ -13,8 +13,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 load_dotenv()
 
 # ── ML model (loaded once) ────────────────────────────────────────────────────
-# model = SentenceTransformer("all-MiniLM-L12-v2")
-model = SentenceTransformer("all-MiniLM-L12-v2")  # smaller model
+model = SentenceTransformer("all-MiniLM-L6-v2")
 
 app = FastAPI()
 PORT = int(os.getenv("PORT", 8000))
@@ -27,6 +26,7 @@ def top_keywords(
     return_related: bool = False,
     distance_threshold: float = 0.25,
     return_cluster_sizes: bool = False,
+    batch_size: int = 64,
 ) -> Tuple[List[str], Dict[str, List[str]], Dict[str, int]]:
     """Cluster keywords semantically and return representatives (+ related)."""
     freq: Dict[str, int] = {}
@@ -39,7 +39,7 @@ def top_keywords(
         return [], {}, {}
 
     # embeddings + similarity
-    emb = model.encode(uniques)
+    emb = model.encode(uniques, batch_size=batch_size)
     sim = cosine_similarity(emb)
 
     clustering = AgglomerativeClustering(
@@ -84,6 +84,7 @@ class TopicsRequest(BaseModel):
     includeRelated: bool = False
     distance_threshold: float = 0.25
     includeClusterSizes: bool = False
+    batchSize: int = 64
 
 
 # ── routes ────────────────────────────────────────────────────────────────────
@@ -104,12 +105,16 @@ async def analyze_keywords_post(request: TopicsRequest):
             status_code=400, detail="distance_threshold must be between 0.01 and 1.0"
         )
 
+    if not (1 <= request.batchSize <= 512):
+        raise HTTPException(status_code=400, detail="batchSize must be between 1 and 512")
+
     top, related, cluster_sizes = top_keywords(
         request.topics,
         request.topN,
         request.includeRelated,
         request.distance_threshold,
         request.includeClusterSizes,
+        batch_size=request.batchSize,
     )
     resp: Dict[str, object] = {"topKeywords": top}
     if request.includeRelated:
