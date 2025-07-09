@@ -6,17 +6,14 @@ ML analysis related to GitHub repositories and project data.
 It is designed to work independently or as a microservice within
 [DailyRepo](https://github.com/tianpai/dailyrepo) pipeline.
 
-Currently, it performs keyword frequency analysis. Future functionality will
-include star history growth and trend analysis for repositories.
+Currently, it performs keyword frequency and clustering analysis using ML.
+Future functionality will include star history growth and trend analysis for
+repositories.
 
 ## Features
 
-1. Accepts a list of keywords and returns the top N most frequently used keywords.
-2. Case-insensitive counting
-3. Lightweight and fast for integration in scraping or analysis
-   pipelines.
-4. Designed to expand with additional ML analysis endpoints in the
-   future.
+1. Accepts a list of keywords and returns the top N most frequently used
+   keywords using a small [transformer model](<https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)>).
 
 ## Current Endpoints
 
@@ -108,6 +105,11 @@ interface KeywordAnalysisResponse {
 
 1. Star history growth and trend analysis.
 2. Repository scoring and ranking based on growth and activity.
+
+## NOTE
+
+1. After the server is deployed, there is a short wait time for the transformer
+   model to be downloaded and loaded into memory. This is normal and expected.
 
 ## License
 
